@@ -1,102 +1,103 @@
-from itertools import product
-
 import gymnasium as gym
-
 import random
 
-env = gym.make("Blackjack-v1", natural=False, sab=False)
+env = gym.make('Blackjack-v1', natural=False, sab=False)
 
-# Each state contains (player sum, dealer card, usable ace).
-state_ranges = state_ranges = (range(32), range(11), range(2))
+###YOUR Q-LEARNING CODE BEGINS
 
-# Each state starts with two scores: [stick, hit].
-q_table = {state: [0.0, 0.0] for state in product(*state_ranges)}
+# the q table holds a score for every state
+# a state is (my cards total, dealer card, if i have an ace i can use)
+# every state has 2 scores, one for stick (0) and one for hit (1)
+q = {}
+for my_total in range(32):
+    for dealer_card in range(11):
+        for ace in range(2):
+            q[(my_total, dealer_card, ace)] = [0, 0]
 
-alpha = 0.1  
-gamma = 0.95 
+# numbers for learning
+learn_rate = 0.1     # how much the bot learns each time
+discount = 0.95      # how much it cares about later rewards
+explore = 0.1        # how often it tries a random move
+games = 10000
 
-episodes = 10_000
-epsilon = 0.1
 wins = 0
 
-for episode in range(1, episodes + 1):
-    state, _ = env.reset()
+for game in range(games):
+    state, info = env.reset()
+    done = False
 
-    while True:
-        if random.random() < epsilon:
+    while done == False:
+        # sometimes pick a random move so the bot tries new stuff
+        if random.random() < explore:
             action = env.action_space.sample()
         else:
-            scores = q_table[state]
-            best_score = max(scores)
-            best_actions = [
-                index for index, score in enumerate(scores)
-                if score == best_score
-            ]
-            action = random.choice(best_actions)
+            # otherwise pick the move with the bigger score
+            if q[state][0] > q[state][1]:
+                action = 0
+            elif q[state][1] > q[state][0]:
+                action = 1
+            else:
+                action = random.choice([0, 1])  # tie so just guess
 
-        next_state, reward, terminated, truncated, _ = env.step(action)
+        new_state, reward, terminated, truncated, info = env.step(action)
 
-        target = float(reward)
-        if not terminated:
-            target += gamma * max(q_table[next_state])
+        # this is the q learning part
+        if terminated:
+            goal = reward  # game is over so there is no next state
+        else:
+            goal = reward + discount * max(q[new_state])
 
-        old_value = q_table[state][action]
-        q_table[state][action] = old_value + alpha * (target - old_value)
+        q[state][action] = q[state][action] + learn_rate * (goal - q[state][action])
 
+        state = new_state
         if terminated or truncated:
-            break
+            done = True
 
-        state = next_state
-
-    if terminated and float(reward) > 0:
-        result = "Win"
-        wins += 1
-    elif terminated and float(reward) < 0:
-        result = "Loss"
-    elif terminated:
-        result = "Draw"
+    # say if the bot won or lost
+    if reward > 0:
+        print("Game", game + 1, ": the bot WON")
+        wins = wins + 1
+    elif reward < 0:
+        print("Game", game + 1, ": the bot lost")
     else:
-        result = "Truncated"
+        print("Game", game + 1, ": it was a tie")
 
-    print(f"Episode {episode}: {result}")
-
-print(f"Training win rate: {wins / episodes:.1%}")
+print("The bot won", wins, "out of", games, "games")
+print("Win rate:", round(wins / games * 100, 1), "%")
 
 env.close()
 
-demo_env = gym.make(
-    "Blackjack-v1",
-    natural=False,
-    sab=False,
-    render_mode="human",
-)
+# now watch the bot play a few games with the picture on
+env = gym.make('Blackjack-v1', natural=False, sab=False, render_mode="human")
 
-demo_wins = 0
-demo_hands = 5
+show_wins = 0
+show_games = 5
 
-for hand in range(1, demo_hands + 1):
-    state, _ = demo_env.reset()
+for game in range(show_games):
+    state, info = env.reset()
+    done = False
 
-    while True:
-        scores = q_table[state]
-        action = max(range(len(scores)), key=scores.__getitem__)
-        state, reward, terminated, truncated, _ = demo_env.step(action)
+    while done == False:
+        # no random moves now, just the best one
+        if q[state][1] > q[state][0]:
+            action = 1
+        else:
+            action = 0
 
+        state, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
-            break
+            done = True
 
-    final_reward = float(reward)
-    if terminated and final_reward > 0:
-        result = "Win"
-        demo_wins += 1
-    elif terminated and final_reward < 0:
-        result = "Loss"
-    elif terminated:
-        result = "Draw"
+    if reward > 0:
+        print("Show game", game + 1, ": the bot WON")
+        show_wins = show_wins + 1
+    elif reward < 0:
+        print("Show game", game + 1, ": the bot lost")
     else:
-        result = "Truncated"
+        print("Show game", game + 1, ": it was a tie")
 
-    print(f"Demo hand {hand}: {result}")
+print("The bot won", show_wins, "out of", show_games, "show games")
 
-demo_env.close()
-print(f"Demo wins: {demo_wins}/{demo_hands}")
+env.close()
+
+###YOUR Q-LEARNING CODE ENDS
