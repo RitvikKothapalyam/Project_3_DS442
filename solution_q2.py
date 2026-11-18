@@ -1,150 +1,179 @@
-from collections import defaultdict
-
 import gymnasium as gym
+import random
 
-env = gym.make(
-    "FrozenLake-v1",
-    desc=None,
-    map_name="4x4",
-    is_slippery=True,
-)
+# no picture for the random part so it goes fast
+env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True)
 
-episodes = 1_000
-action_counts = defaultdict(int)
-transition_counts = defaultdict(int)
-reward_totals = defaultdict(float)
-terminal_transitions = set()
-goals_reached = 0
+# Your code for Q2.2 which Executes Random Policy until 1000 episodes
 
-for _ in range(episodes):
-    state, _ = env.reset()
+# these dictionaries remember everything the bot sees
+times_tried = {}       # how many times i did action a in state s
+times_landed = {}      # how many times (s, a) took me to s2
+reward_added = {}      # all the rewards i got for (s, a, s2) added up
+game_enders = []       # moves that ended the game (hole or goal)
+goals = 0
 
-    while True:
-        action = env.action_space.sample()
-        next_state, reward, terminated, truncated, _ = env.step(action)
+for episode in range(1000):
+    state, info = env.reset()
+    done = False
 
-        transition = (state, action, next_state)
-        action_counts[state, action] += 1
-        transition_counts[transition] += 1
-        reward_totals[transition] += float(reward)
+    while done == False:
+        action = env.action_space.sample()  # just pick a random move
+        new_state, reward, terminated, truncated, info = env.step(action)
+
+        move = (state, action, new_state)
+
+        if (state, action) not in times_tried:
+            times_tried[(state, action)] = 0
+        times_tried[(state, action)] = times_tried[(state, action)] + 1
+
+        if move not in times_landed:
+            times_landed[move] = 0
+            reward_added[move] = 0
+        times_landed[move] = times_landed[move] + 1
+        reward_added[move] = reward_added[move] + reward
 
         if terminated:
-            terminal_transitions.add(transition)
-            if float(reward) > 0:
-                goals_reached += 1
+            if move not in game_enders:
+                game_enders.append(move)
+            if reward > 0:
+                goals = goals + 1
 
+        state = new_state
         if terminated or truncated:
-            break
-
-        state = next_state
+            done = True
 
 env.close()
 
-# For each observed move, estimate its possible outcomes and rewards.
-transition_model = defaultdict(list)
+# now make T(s'|s,a) and R(s,a,s') from the data
+# T = how many times i landed there / how many times i tried that move
+# R = the average reward for that move
+# model[(s, a)] is a list of [s2, T, R, did the game end]
+model = {}
+for move in times_landed:
+    s = move[0]
+    a = move[1]
+    s2 = move[2]
+    T = times_landed[move] / times_tried[(s, a)]
+    R = reward_added[move] / times_landed[move]
+    ended = move in game_enders
 
-for transition, count in transition_counts.items():
-    state, action, next_state = transition
-    probability = count / action_counts[state, action]
-    average_reward = reward_totals[transition] / count
-    is_terminal = transition in terminal_transitions
+    if (s, a) not in model:
+        model[(s, a)] = []
+    model[(s, a)].append([s2, T, R, ended])
 
-    transition_model[state, action].append(
-        (next_state, probability, average_reward, is_terminal)
-    )
-
-print(f"Random episodes completed: {episodes}")
-print(f"Goals reached: {goals_reached}")
-print(f"Observed state-action pairs: {len(transition_model)}")
-
-num_states = 16
-num_actions = 4
-gamma = 0.99
-tolerance = 0.000001
+print("Random games played:", 1000)
+print("Times it reached the goal:", goals)
+print("State and action pairs it saw:", len(model))
 
 
-def action_value(state, action, values):
-    total = 0.0
-    for next_state, probability, reward, is_terminal in transition_model.get(
-        (state, action), []
-    ):
-        future_value = 0.0 if is_terminal else values[next_state]
-        total += probability * (reward + gamma * future_value)
+# Your code for Q2.3 which implements Value Iteration
+
+discount = 0.99
+small_number = 0.000001  # stop when the values barely change
+
+
+# works out how good it is to do action a in state s
+def get_q(s, a, V):
+    total = 0
+    if (s, a) in model:
+        for s2, T, R, ended in model[(s, a)]:
+            if ended:
+                later = 0  # nothing after the game ends
+            else:
+                later = V[s2]
+            total = total + T * (R + discount * later)
     return total
 
 
-values = [0.0] * num_states
-sweeps = 0
+V = [0] * 16  # every square starts at 0
+rounds = 0
 
 while True:
-    new_values = [
-        max(action_value(state, action, values) for action in range(num_actions))
-        for state in range(num_states)
-    ]
+    new_V = []
+    for s in range(16):
+        best = get_q(s, 0, V)
+        for a in range(1, 4):
+            if get_q(s, a, V) > best:
+                best = get_q(s, a, V)
+        new_V.append(best)
 
-    max_change = max(
-        abs(new - old) for new, old in zip(new_values, values)
-    )
-    values = new_values
-    sweeps += 1
+    # find the biggest change this round
+    biggest_change = 0
+    for s in range(16):
+        change = abs(new_V[s] - V[s])
+        if change > biggest_change:
+            biggest_change = change
 
-    if max_change < tolerance:
+    V = new_V
+    rounds = rounds + 1
+
+    if biggest_change < small_number:
         break
 
-print(f"\nValue iteration converged after {sweeps} sweeps.")
-print("Learned state values:")
-for row in range(0, num_states, 4):
-    print(" ".join(f"{value:.3f}" for value in values[row:row + 4]))
+print()
+print("Value iteration finished after", rounds, "rounds")
+print("Values for each square:")
+for row in range(4):
+    line = ""
+    for col in range(4):
+        line = line + str(round(V[row * 4 + col], 3)) + "  "
+    print(line)
 
-action_symbols = ["L", "D", "R", "U"]
+
+# Your code for Q2.4 which implements Policy Extraction
+
+# for every square pick the move with the best score
+# 0 = left, 1 = down, 2 = right, 3 = up
+arrows = ["L", "D", "R", "U"]
 policy = {}
 
-for state in range(num_states):
-    observed_actions = [
-        action for action in range(num_actions)
-        if (state, action) in transition_model
-    ]
+for s in range(16):
+    best_move = None
+    best_score = None
+    for a in range(4):
+        if (s, a) in model:  # only moves i actually saw
+            score = get_q(s, a, V)
+            if best_score == None or score > best_score:
+                best_score = score
+                best_move = a
+    if best_move != None:
+        policy[s] = best_move
 
-    if observed_actions:
-        policy[state] = max(
-            observed_actions,
-            key=lambda action: action_value(state, action, values),
-        )
-
-print("\nLearned policy:")
-for row in range(0, num_states, 4):
-    cells = [
-        action_symbols[policy[state]] if state in policy else "-"
-        for state in range(row, row + 4)
-    ]
-    print(" ".join(cells))
+print()
+print("Best move for each square (- means no moves seen there):")
+for row in range(4):
+    line = ""
+    for col in range(4):
+        s = row * 4 + col
+        if s in policy:
+            line = line + arrows[policy[s]] + " "
+        else:
+            line = line + "- "
+    print(line)
 
 
-demo_env = gym.make(
-    "FrozenLake-v1",
-    desc=None,
-    map_name="4x4",
-    is_slippery=True,
-    render_mode="human",
-)
+# Your code for Q2.5 which executes the optimal policy
 
-for episode in range(1, 4):
-    state, _ = demo_env.reset()
+# turn the picture on so we can watch it
+env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True,
+               render_mode="human")
 
-    while True:
-        action = policy[state]
-        state, reward, terminated, truncated, _ = demo_env.step(action)
+for episode in range(3):
+    state, info = env.reset()
+    done = False
 
+    while done == False:
+        action = policy[state]  # use the best move, not a random one
+        state, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
-            break
+            done = True
 
-    if terminated and float(reward) > 0:
-        result = "Reached the goal"
+    if terminated and reward > 0:
+        print("Try", episode + 1, ": made it to the present!")
     elif terminated:
-        result = "Fell into a hole"
+        print("Try", episode + 1, ": fell in a hole")
     else:
-        result = "Reached the step limit"
+        print("Try", episode + 1, ": ran out of steps")
 
-    print(f"Demo episode {episode}: {result}")
-
-demo_env.close()
+env.close()
